@@ -4072,10 +4072,12 @@ static int new_socket(struct addrinfo *ai) {
     int sfd;
     int flags;
 
+    // 调用系统函数建立socket
     if ((sfd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) == -1) {
         return -1;
     }
 
+    // 设置socket为非阻塞
     if ((flags = fcntl(sfd, F_GETFL, 0)) < 0 ||
         fcntl(sfd, F_SETFL, flags | O_NONBLOCK) < 0) {
         perror("setting O_NONBLOCK");
@@ -4089,6 +4091,8 @@ static int new_socket(struct addrinfo *ai) {
 /*
  * Sets a socket's send buffer size to the maximum allowed by the system.
  */
+
+// 如果是 UDP协议，调整发送缓存到最大值
 static void maximize_sndbuf(const int sfd) {
     socklen_t intsize = sizeof(int);
     int last_good = 0;
@@ -4245,6 +4249,7 @@ static int server_socket(const char *interface,
                     struct sockaddr_in6 in6;
                 } my_sockaddr;
                 socklen_t len = sizeof(my_sockaddr);
+                // 如果端口号为0，那么 getsockname 返回内核分配的本地端口号
                 if (getsockname(sfd, (struct sockaddr*)&my_sockaddr, &len)==0) {
                     if (next->ai_addr->sa_family == AF_INET) {
                         fprintf(portnumber_file, "%s INET: %u\n",
@@ -4264,21 +4269,24 @@ static int server_socket(const char *interface,
 
             for (c = 0; c < settings.num_threads_per_udp; c++) {
                 /* this is guaranteed to hit all threads because we round-robin */
+                // 分发连接，因为 UDP 没有连接建立的过程，直接进行连接的分发
                 dispatch_conn_new(sfd, conn_read, EV_READ | EV_PERSIST,
                                   UDP_READ_BUFFER_SIZE, transport);
             }
         } else {
+            // TCP，建立连接
             if (!(listen_conn_add = conn_new(sfd, conn_listening,
                                              EV_READ | EV_PERSIST, 1,
                                              transport, main_base))) {
                 fprintf(stderr, "failed to create listening connection\n");
                 exit(EXIT_FAILURE);
             }
+            // 建立的连接组成链表
             listen_conn_add->next = listen_conn;
             listen_conn = listen_conn_add;
         }
     }
-
+    // 释放资源
     freeaddrinfo(ai);
 
     /* Return zero iff we detected no errors in starting up connections */
