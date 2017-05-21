@@ -4129,6 +4129,8 @@ static void maximize_sndbuf(const int sfd) {
  *        when they are successfully added to the list of ports we
  *        listen on.
  */
+
+// 创建 socket并绑定在特殊的端口上
 static int server_socket(const char *interface,
                          int port,
                          enum network_transport transport,
@@ -4137,6 +4139,7 @@ static int server_socket(const char *interface,
     struct linger ling = {0, 0};
     struct addrinfo *ai;
     struct addrinfo *next;
+    // 设定协议无关，用于监听的标志位
     struct addrinfo hints = { .ai_flags = AI_PASSIVE,
                               .ai_family = AF_UNSPEC };
     char port_buf[NI_MAXSERV];
@@ -4144,12 +4147,15 @@ static int server_socket(const char *interface,
     int success = 0;
     int flags =1;
 
+    // 指定 socket类型，入股是UDP，则用数据报协议，如果是TCP，则用数据流协议
     hints.ai_socktype = IS_UDP(transport) ? SOCK_DGRAM : SOCK_STREAM;
 
     if (port == -1) {
         port = 0;
     }
     snprintf(port_buf, sizeof(port_buf), "%d", port);
+
+    // 通过 getaddrinfo 将主机和端口号映射成为socket的地址信息，并通过 ai返回
     error= getaddrinfo(interface, port_buf, &hints, &ai);
     if (error != 0) {
         if (error != EAI_SYSTEM)
@@ -4159,8 +4165,14 @@ static int server_socket(const char *interface,
         return 1;
     }
 
+    /*getaddrinfo返回多个addrinfo的情形有如下两种：
+    1.如果与interface参数关联的地址有多个，那么适用于所请求地址簇的每个地址都返回一个对应的结构。
+    2.如果port_buf参数指定的服务支持多个套接口类型，那么每个套接口类型都可能返回一个对应的结构。
+    */
+
     for (next= ai; next; next= next->ai_next) {
         conn *listen_conn_add;
+        // 为每个地址信息建立一个 socket
         if ((sfd = new_socket(next)) == -1) {
             /* getaddrinfo can return "junk" addresses,
              * we make sure at least one works before erroring.
@@ -4185,22 +4197,28 @@ static int server_socket(const char *interface,
 #endif
 
         setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags));
+        // 如果是 UDP 协议
         if (IS_UDP(transport)) {
+            // 扩大发送缓冲区
             maximize_sndbuf(sfd);
         } else {
+            // 设定 socket 选项，SO_KEEPALIVE 定期确定连线是否已终止
             error = setsockopt(sfd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags));
             if (error != 0)
                 perror("setsockopt");
 
+            // 设定socket选项，SO_LINGER 表示执行close操作时，如果缓冲区还有数据，可以继续发送，确保数据可以安全可靠的传送出去
             error = setsockopt(sfd, SOL_SOCKET, SO_LINGER, (void *)&ling, sizeof(ling));
             if (error != 0)
                 perror("setsockopt");
 
+            // 设定 IP 地址选项，TCP_NODELAY 表示禁用 Nagle 算法
             error = setsockopt(sfd, IPPROTO_TCP, TCP_NODELAY, (void *)&flags, sizeof(flags));
             if (error != 0)
                 perror("setsockopt");
         }
 
+        // 执行绑定操作
         if (bind(sfd, next->ai_addr, next->ai_addrlen) == -1) {
             if (errno != EADDRINUSE) {
                 perror("bind()");
@@ -4212,6 +4230,7 @@ static int server_socket(const char *interface,
             continue;
         } else {
             success++;
+            // 如果不是 UDP 协议，则执行监听操作，监听队列为初始启动的值
             if (!IS_UDP(transport) && listen(sfd, settings.backlog) == -1) {
                 perror("listen()");
                 close(sfd);
@@ -4266,11 +4285,14 @@ static int server_socket(const char *interface,
     return success == 0;
 }
 
+
+// TCP和UDP都使用这个函数来创建监听和绑定
 static int server_sockets(int port, enum network_transport transport,
                           FILE *portnumber_file) {
+    // settings.inter 指定的是要绑定的ip地址信息，如果为空，则表示是绑定本机的ip
     if (settings.inter == NULL) {
         return server_socket(settings.inter, port, transport, portnumber_file);
-    } else {
+    } else { // 如果服务有多个ip信息，可以在每个ip，port上面绑定一个memcached的实例。下面的是一些输入参数度解析，解析完毕之后，开始执行绑定
         // tokenize them and bind to each one of them..
         char *b;
         int ret = 0;
@@ -5164,6 +5186,7 @@ int main (int argc, char **argv) {
 
     /* create the listening socket, bind it, and init */
     if (settings.socketpath == NULL) {
+        // 从环境比变量中读取端口文件所在的文件路径
         const char *portnumber_filename = getenv("MEMCACHED_PORT_FILENAME");
         char temp_portnumber_filename[PATH_MAX];
         FILE *portnumber_file = NULL;
@@ -5181,6 +5204,8 @@ int main (int argc, char **argv) {
         }
 
         errno = 0;
+
+        // settings.port表示Memcached采用的是TCP协议，创建TCP Socket，监听并且绑定
         if (settings.port && server_sockets(settings.port, tcp_transport,
                                            portnumber_file)) {
             vperror("failed to listen on TCP port %d", settings.port);
@@ -5196,12 +5221,14 @@ int main (int argc, char **argv) {
 
         /* create the UDP listening socket and bind it */
         errno = 0;
+        //settings.udpport表示Memcached采用的是UDP协议，创建UDP Socket，监听并且绑定
         if (settings.udpport && server_sockets(settings.udpport, udp_transport,
                                               portnumber_file)) {
             vperror("failed to listen on UDP port %d", settings.udpport);
             exit(EX_OSERR);
         }
 
+        // 如果端口文件不为空在，则关闭文件，并且重命令文件
         if (portnumber_file) {
             fclose(portnumber_file);
             rename(temp_portnumber_filename, portnumber_filename);
