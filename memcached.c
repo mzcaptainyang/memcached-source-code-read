@@ -279,12 +279,12 @@ static conn **freeconns;
 static int freetotal;
 static int freecurr;
 /* Lock for connection freelist */
-static pthread_mutex_t conn_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t conn_lock = PTHREAD_MUTEX_INITIALIZER; // 进行线程锁的初始化
 
 
 static void conn_init(void) {
-    freetotal = 200;
-    freecurr = 0;
+    freetotal = 200; // 初始化空闲连接总数
+    freecurr = 0; // 初始化当前剩余的空闲连接数
     if ((freeconns = calloc(freetotal, sizeof(conn *))) == NULL) {
         fprintf(stderr, "Failed to allocate connection structures\n");
     }
@@ -297,13 +297,14 @@ static void conn_init(void) {
 conn *conn_from_freelist() {
     conn *c;
 
-    pthread_mutex_lock(&conn_lock);
-    if (freecurr > 0) {
+    pthread_mutex_lock(&conn_lock); // 操作链表，加锁，保持同步
+    if (freecurr > 0) { // 如果当前有闲置的连接，则返回对应的连接，freecurr 为静态的全局变量，
+        // freeconns 会在 memcached启动的时候进行初始化
         c = freeconns[--freecurr];
     } else {
-        c = NULL;
+        c = NULL; // 如果没有闲置的连接，则返回 NULL
     }
-    pthread_mutex_unlock(&conn_lock);
+    pthread_mutex_unlock(&conn_lock); // 对链表进行解锁
 
     return c;
 }
@@ -313,12 +314,13 @@ conn *conn_from_freelist() {
  */
 bool conn_add_to_freelist(conn *c) {
     bool ret = true;
-    pthread_mutex_lock(&conn_lock);
-    if (freecurr < freetotal) {
-        freeconns[freecurr++] = c;
+    pthread_mutex_lock(&conn_lock); // 操作链表，加锁，保持同步
+    if (freecurr < freetotal) { // 如果 freecurr 还有空闲的空间，则直接添加
+        freeconns[freecurr++] = c; // 将空闲的连接直接添加到 freeconns 中
         ret = false;
-    } else {
+    } else { // 如果没有多余的空间，则进行扩容，按目前容量的两倍来进行扩容
         /* try to enlarge free connections array */
+        //
         size_t newsize = freetotal * 2;
         conn **new_freeconns = realloc(freeconns, sizeof(conn *) * newsize);
         if (new_freeconns) {
@@ -328,7 +330,7 @@ bool conn_add_to_freelist(conn *c) {
             ret = false;
         }
     }
-    pthread_mutex_unlock(&conn_lock);
+    pthread_mutex_unlock(&conn_lock); // 操作链表，解除锁
     return ret;
 }
 
@@ -352,15 +354,16 @@ conn *conn_new(const int sfd, enum conn_states init_state,
                 const int event_flags,
                 const int read_buffer_size, enum network_transport transport,
                 struct event_base *base) {
-    conn *c = conn_from_freelist();
+    conn *c = conn_from_freelist(); // 获取一个空闲的连接，conn是 Memcached 内部对网络连接的一个封装
 
-    if (NULL == c) {
-        if (!(c = (conn *)calloc(1, sizeof(conn)))) {
+    if (NULL == c) { // 如果当前没有空闲的连接
+        if (!(c = (conn *)calloc(1, sizeof(conn)))) { // 申请连接空间
             fprintf(stderr, "calloc()\n");
             return NULL;
         }
         MEMCACHED_CONN_CREATE(c);
 
+        // 进行初始化
         c->rbuf = c->wbuf = 0;
         c->ilist = 0;
         c->suffixlist = 0;
@@ -376,6 +379,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         c->msgsize = MSG_LIST_INITIAL;
         c->hdrsize = 0;
 
+        // 每个连接都自带读入和输出缓冲区，在进行网络收发数据时，特别方便
         c->rbuf = (char *)malloc((size_t)c->rsize);
         c->wbuf = (char *)malloc((size_t)c->wsize);
         c->ilist = (item **)malloc(sizeof(item *) * c->isize);
@@ -391,7 +395,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         }
 
         STATS_LOCK();
-        stats.conn_structs++;
+        stats.conn_structs++; // 统计变量更新
         STATS_UNLOCK();
     }
 
@@ -407,6 +411,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         c->request_addr_size = 0;
     }
 
+    // 输出一些日志信息
     if (settings.verbose > 1) {
         if (init_state == conn_listening) {
             fprintf(stderr, "<%d server listening (%s)\n", sfd,
@@ -449,11 +454,15 @@ conn *conn_new(const int sfd, enum conn_states init_state,
 
     c->noreply = false;
 
+    // 建立 sfd 描述符上面的 event事件，事件的回调函数为 event_handler
     event_set(&c->event, sfd, event_flags, event_handler, (void *)c);
+    // 为创建的 event 事件指定事件基地
     event_base_set(base, &c->event);
     c->ev_flags = event_flags;
 
+    // 把 event添加到事件基地进行监听
     if (event_add(&c->event, 0) == -1) {
+        // 如果建立 libevent 事件失败，则将创建的conn添加到空闲列表中
         if (conn_add_to_freelist(c)) {
             conn_free(c);
         }
@@ -462,8 +471,8 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     }
 
     STATS_LOCK();
-    stats.curr_conns++;
-    stats.total_conns++;
+    stats.curr_conns++; // 统计信息更新
+    stats.total_conns++; // 统计信息更新
     STATS_UNLOCK();
 
     MEMCACHED_CONN_ALLOCATE(c->sfd);
@@ -4050,18 +4059,19 @@ void event_handler(const int fd, const short which, void *arg) {
     conn *c;
 
     c = (conn *)arg;
-    assert(c != NULL);
+    assert(c != NULL); // 如果条件返回错误，则终止程序的执行
 
     c->which = which;
 
     /* sanity */
-    if (fd != c->sfd) {
+    if (fd != c->sfd) { // 判断传进来的 fd 是否等于 连接的fd
         if (settings.verbose > 0)
             fprintf(stderr, "Catastrophic: event fd doesn't match conn fd!\n");
         conn_close(c);
         return;
     }
 
+    // 开始进入业务状态处理
     drive_machine(c);
 
     /* wait for next event */
@@ -4100,6 +4110,7 @@ static void maximize_sndbuf(const int sfd) {
     int old_size;
 
     /* Start with the default size. */
+    // 读取 socket 的选项
     if (getsockopt(sfd, SOL_SOCKET, SO_SNDBUF, &old_size, &intsize) != 0) {
         if (settings.verbose > 0)
             perror("getsockopt(SO_SNDBUF)");
@@ -4107,6 +4118,7 @@ static void maximize_sndbuf(const int sfd) {
     }
 
     /* Binary-search for the real maximum. */
+    // 二分查找法
     min = old_size;
     max = MAX_SENDBUF_SIZE;
 
