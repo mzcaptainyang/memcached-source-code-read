@@ -4055,6 +4055,7 @@ static void drive_machine(conn *c) {
     return;
 }
 
+// libevent 事件回调函数处理，回调函数被调用时，表明 Memcached 监听的端口号有网络事件到了
 void event_handler(const int fd, const short which, void *arg) {
     conn *c;
 
@@ -5169,7 +5170,9 @@ int main (int argc, char **argv) {
     /* initialize other stuff */
     stats_init();
     assoc_init(settings.hashpower_init);
+    // 连接初始化
     conn_init();
+    // 内存初始化，settings.maxbytes 是 Memcached 初始启动参数指定的内存值大小，settings.factor 是内存增长因子
     slabs_init(settings.maxbytes, settings.factor, preallocate);
 
     /*

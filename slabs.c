@@ -39,14 +39,14 @@ typedef struct {
     size_t requested; /* The number of requested bytes */
 } slabclass_t;
 
-static slabclass_t slabclass[MAX_NUMBER_OF_SLAB_CLASSES];
-static size_t mem_limit = 0;
-static size_t mem_malloced = 0;
+static slabclass_t slabclass[MAX_NUMBER_OF_SLAB_CLASSES]; // 定义 slab 集合，总共200 个
+static size_t mem_limit = 0; // 总的内存的大小
+static size_t mem_malloced = 0; // 初始化内存的大小
 static int power_largest;
 
-static void *mem_base = NULL;
-static void *mem_current = NULL;
-static size_t mem_avail = 0;
+static void *mem_base = NULL; // 指向总内存的首地址
+static void *mem_current = NULL; // 当前分配到的内存地址
+static size_t mem_avail = 0; // 当前可用内存的大小
 
 /**
  * Access to the slab allocator is protected by this lock
@@ -94,22 +94,24 @@ unsigned int slabs_clsid(const size_t size) {
  */
 void slabs_init(const size_t limit, const double factor, const bool prealloc) {
     int i = POWER_SMALLEST - 1;
+    // size 表示申请空间的大小，其值由配置的 chunk_size 和单个 item 的大小来指定
     unsigned int size = sizeof(item) + settings.chunk_size;
 
-    mem_limit = limit;
+    mem_limit = limit; // mem_limit 是全局变量，是总内存的大小，默认为64M
 
-    if (prealloc) {
+    if (prealloc) { // 支持预分配内存
         /* Allocate everything in a big chunk with malloc */
-        mem_base = malloc(mem_limit);
+        mem_base = malloc(mem_limit); // 申请地址，mem_base 指向申请的地址
         if (mem_base != NULL) {
-            mem_current = mem_base;
-            mem_avail = mem_limit;
-        } else {
+            mem_current = mem_base; // 初始化 mem_current 指向当前地址
+            mem_avail = mem_limit; // 初始化可用内存大小为 mem_limit
+        } else { // 分配内存失败
             fprintf(stderr, "Warning: Failed to allocate requested memory in"
                     " one large chunk.\nWill allocate in smaller chunks\n");
         }
     }
 
+    // 置空 slabclass 数组
     memset(slabclass, 0, sizeof(slabclass));
 
     while (++i < POWER_LARGEST && size <= settings.item_size_max / factor) {
