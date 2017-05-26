@@ -95,6 +95,7 @@ unsigned int slabs_clsid(const size_t size) {
 void slabs_init(const size_t limit, const double factor, const bool prealloc) {
     int i = POWER_SMALLEST - 1;
     // size 表示申请空间的大小，其值由配置的 chunk_size 和单个 item 的大小来指定
+    // chunk的数据结构体本身需要消耗一定的空间，所以消耗的实际内存需要加上chunk的大小
     unsigned int size = sizeof(item) + settings.chunk_size;
 
     mem_limit = limit; // mem_limit 是全局变量，是总内存的大小，默认为64M
@@ -114,6 +115,7 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc) {
     // 置空 slabclass 数组
     memset(slabclass, 0, sizeof(slabclass));
 
+    // 开始分配，i < 200 && 单个 chunk 的 size < 单个 item 最大大小/内存增长因子
     while (++i < POWER_LARGEST && size <= settings.item_size_max / factor) {
         /* Make sure items are always n-byte aligned */
         if (size % CHUNK_ALIGN_BYTES)
