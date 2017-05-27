@@ -91,32 +91,36 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     uint8_t nsuffix;
     item *it = NULL;
     char suffix[40];
+    // item的总大小
     size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
     if (settings.use_cas) {
-        ntotal += sizeof(uint64_t);
+        ntotal += sizeof(uint64_t); // 如果有用到 cas， 那么item的大小还要加上 unit64_t的size
     }
 
-    unsigned int id = slabs_clsid(ntotal);
+    unsigned int id = slabs_clsid(ntotal); // 根据 item 的大小，找到合适的 slabclass
     if (id == 0)
         return 0;
 
-    mutex_lock(&cache_lock);
+    mutex_lock(&cache_lock); // cache 锁
     /* do a quick check if we have any expired items in the tail.. */
-    int tries = 5;
+    // 准备分配新的 item，顺便快速扫描一下 lru 链表末尾有没有过期的item，有的话就利用过期的空间
+    int tries = 5; // 默认在 lru 链表里面搜索五次，超过五次不继续搜索
     int tried_alloc = 0;
     item *search;
     void *hold_lock = NULL;
     rel_time_t oldest_live = settings.oldest_live;
 
-    search = tails[id];
+    search = tails[id]; // 这个tails 是一个全局变量，tails[xx] 是id为xx的slabclass lru链表的尾部
     /* We walk up *only* for locked items. Never searching for expired.
      * Waste of CPU for almost all deployments */
+    // 从LRU链表尾部（也就是最久没有使用的items）开始往前查找
     for (; tries > 0 && search != NULL; tries--, search=search->prev) {
         uint32_t hv = hash(ITEM_key(search), search->nkey, 0);
         /* Attempt to hash item lock the "search" item. If locked, no
          * other callers can incr the refcount
          */
         /* FIXME: I think we need to mask the hv here for comparison? */
+        // 尝试去锁住当前的 item
         if (hv != cur_hv && (hold_lock = item_trylock(hv)) == NULL)
             continue;
         /* Now see if the item is refcount locked */
@@ -136,6 +140,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         }
 
         /* Expired or flushed */
+        // 如果查找的 item 超时了，则拿下空间
         if ((search->exptime != 0 && search->exptime < current_time)
             || (search->time <= oldest_live && oldest_live <= current_time)) {
             itemstats[id].reclaimed++;
