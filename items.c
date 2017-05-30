@@ -147,12 +147,22 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             if ((search->it_flags & ITEM_FETCHED) == 0) {
                 itemstats[id].expired_unfetched++;
             }
+            // 拿下已经过期的item的空间
             it = search;
+            // 更新统计计数，调整所请求的内存的统计信息
             slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+            /**
+             * 什么是Link，可以这样简单的理解，就是把item加到哈希表和LRU链表的过程。详见items:do_item_link函数，这里把item旧的link取消掉，当前函数do_item_alloc的工作只是拿空间，而往后可知道拿到item空间会对这块item进行「link」工作，而这里这块item空间是旧的item超时
+             */
             do_item_unlink_nolock(it, hv);
             /* Initialize the item block: */
             it->slabs_clsid = 0;
         } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
+            /**
+             * 如果没有可用的空间，则调用slabs_alloc 分配空间，详见 slabs_alloc
+             * 如果 slabs_alloc 分配空间失败，则返回 Null，则往下走，下面的代码是，把 LRU 列表中的最后一个淘汰，即使 item 没有过期。一般是可用的内存满了，需要按照 LRU 进行淘汰的时候
+             */
+             // 标记一下，表示有进入此分支，表示有尝试过调用 slabs_alloc 去分配新的空间
             tried_alloc = 1;
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
