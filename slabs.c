@@ -221,26 +221,34 @@ static int do_slabs_newslab(const unsigned int id) {
 }
 
 /*@null@*/
+// 根据item大小和slabsclass分配空间
 static void *do_slabs_alloc(const size_t size, unsigned int id) {
     slabclass_t *p;
     void *ret = NULL;
     item *it = NULL;
 
-    if (id < POWER_SMALLEST || id > power_largest) {
+    if (id < POWER_SMALLEST || id > power_largest) { // slabsclass最大的是200，最小的是1
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
         return NULL;
     }
 
+    // slabclass是一个全局变量，是各个slabclass对象数组，在这里取得当前id对应的slabclass
     p = &slabclass[id];
     assert(p->sl_curr == 0 || ((item *)p->slots)->slabs_clsid == 0);
 
     /* fail unless we have space at the end of a recently allocated page,
        we have something on our freelist, or we could allocate a new page */
+    /**
+     * 下面的逻辑相当于：
+     * 如果 p->sl_curr==0，且slots链表中没有空闲的空间，则do_slabs_newslab分配新的slab
+     * 如果 p->sl_curr==0，且do_slabs_newslab分配新的slab失败，则进入if,ret=null,否则进入下面的else
+     */
     if (! (p->sl_curr != 0 || do_slabs_newslab(id) != 0)) {
         /* We don't have more memory available */
         ret = NULL;
     } else if (p->sl_curr != 0) {
         /* return off our freelist */
+        // 把空闲的item分配出去
         it = (item *)p->slots;
         p->slots = it->next;
         if (it->next) it->next->prev = 0;
@@ -249,6 +257,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     }
 
     if (ret) {
+        // 分配成功，记下已分配的字节数
         p->requested += size;
         MEMCACHED_SLABS_ALLOCATE(size, id, p->size, ret);
     } else {
@@ -405,6 +414,7 @@ void *slabs_alloc(size_t size, unsigned int id) {
     void *ret;
 
     pthread_mutex_lock(&slabs_lock);
+    // 根据 item 大小和
     ret = do_slabs_alloc(size, id);
     pthread_mutex_unlock(&slabs_lock);
     return ret;

@@ -164,10 +164,12 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
              */
              // 标记一下，表示有进入此分支，表示有尝试过调用 slabs_alloc 去分配新的空间
             tried_alloc = 1;
+            // 记录一下被淘汰的 item 信息，像我们使用 memcached 经常会查看的 evicted_time 就是在这里赋值的
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
             } else {
                 itemstats[id].evicted++;
+                // 被淘汰的 item 距离上次使用多长时间了
                 itemstats[id].evicted_time = current_time - search->time;
                 if (search->exptime != 0)
                     itemstats[id].evicted_nonzero++;
@@ -175,7 +177,9 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
                     itemstats[id].evicted_unfetched++;
                 }
                 it = search;
+                // 更新统计数据
                 slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+                // 从 哈希表和LRU链表中删掉
                 do_item_unlink_nolock(it, hv);
                 /* Initialize the item block: */
                 it->slabs_clsid = 0;
@@ -186,6 +190,10 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
                  * "successful" memory pull, look behind and see if the next alloc
                  * would be an eviction. Then kick off the slab mover before the
                  * eviction happens.
+                 */
+                /**
+                 * 如果当前的 slabclass 有item 被淘汰掉了，说明 slabclass 可用的内存已经满了，再也没有slab 可以分配了
+                 * 而如果 slab_automove = 2（默认为1），这样会导致angry模式，就是只要分配失败了，就马上进行 slab 的重新分配；将其他 slabclass空间牺牲掉一些，马上给现在的 slabclass 分配空间，而不会合理的根据淘汰统计数据来分析怎么重分配（slab_automove = 1则会）
                  */
                 if (settings.slab_automove == 2)
                     slabs_reassign(-1, id);
@@ -199,18 +207,32 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         break;
     }
 
+    /**
+     * 上面的 for 循环中的逻辑整理如下：
+     * 1.先从LRU链表查找有没有刚好过期的空间，有的话就直接利用这个空间
+     * 2.如果没有过期的空间，则分配新的空间
+     * 3.如果分配新的空间失败，那么往往就是内存都用光了，则从LRU链表中把最旧的即使没有过期的item淘汰掉，空间分配给新的item使用
+     * 异常情况是：这个从『LRU链表中把最旧的即使没有过期的item淘汰掉』是一个不确定的操作，有可能item数据异常，有可能这个item由于和别的item共用锁的桶号，这个桶被锁住了，所以总之各种原因这个item此刻不一定可用，因此用了一个循环尝试多找几次（默认5次）
+     * a.我先找5次LRU中查看有没有可用的过期的item，有的话就用它（for循环5次）
+     * b.五次没有找到可用的过期的item，那我分配新的空间
+     * c.分配新的不成功，那我再找5次看有没有可用的没有过期的item，淘汰它，把空间给新的item使用，（for循环5次）
+     * 上面的代码存在一个问题，如果代码逻辑清晰一些的话，需要写两个for循环，一个是为了a步骤找到可用的过期的item，另一个是a步骤不成功后找到可用的没过期的的空间。而且有重复的找到可用的没有过期的，所以memcached作者将两个for循环结合在一起了。所以只能把c步骤也加入到for循环中。
+     * 所以就可能出现5此都没有找到可用的空间，都没进入过else if那个分支就continue了，为了记下有没有进入过else if分支，使用了一个tried_alloc变量来做记号（很挫的方式）
+     */
+
     if (!tried_alloc && (tries == 0 || search == NULL))
         it = slabs_alloc(ntotal, id);
 
     if (it == NULL) {
         itemstats[id].outofmemory++;
         mutex_unlock(&cache_lock);
-        return NULL;
+        return NULL; // 分配新空间不成功，尝试5次淘汰旧的item也没有成功，只能返回NULL
     }
 
     assert(it->slabs_clsid == 0);
     assert(it != heads[id]);
 
+    // 代码走到这里，说明item分配成功，下面是一些初始化的工作
     /* Item initialization can happen outside of the lock; the item's already
      * been removed from the slab LRU.
      */
