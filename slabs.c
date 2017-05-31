@@ -177,6 +177,12 @@ static void slabs_preallocate (const unsigned int maxslabs) {
 
 static int grow_slab_list (const unsigned int id) {
     slabclass_t *p = &slabclass[id];
+    /**
+     * p->slab_list是一个固定空间大小的数组.而list_size是这个数组分配的空间
+     * p->slabs代表已经分配出去的slabs数
+     * p->list_size代表现在可用多少个slabs数
+     * 所以当slabs等于list_size的时候，代表这个slab_list已经满了，得增大空间
+     */
     if (p->slabs == p->list_size) {
         size_t new_size =  (p->list_size != 0) ? p->list_size * 2 : 16;
         void *new_list = realloc(p->slab_list, new_size * sizeof(void *));
@@ -187,21 +193,36 @@ static int grow_slab_list (const unsigned int id) {
     return 1;
 }
 
+
+// 把整个slab打散成一个个chunk，放到相应的slots链表中
 static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
     slabclass_t *p = &slabclass[id];
     int x;
     for (x = 0; x < p->perslab; x++) {
-        do_slabs_free(ptr, 0, id);
+        do_slabs_free(ptr, 0, id); // 这个函数的主要作用，就是把当前item可用的空间，加入到slots链表中
         ptr += p->size;
     }
 }
 
+/**
+ * 为新的slabclass[id]分配新的slab，仅当当前的slabclass中slots没有空闲的空间才调用此函数分配新的slab
+ * @param id
+ * @return
+ */
 static int do_slabs_newslab(const unsigned int id) {
     slabclass_t *p = &slabclass[id];
+    // 先判断是否开启了自定义的slab大小，如果没有就按照默认的，即p->size*p->perslab
     int len = settings.slab_reassign ? settings.item_size_max
         : p->size * p->perslab;
     char *ptr;
 
+    /**
+     * 下面的if逻辑是：
+     *      如果内存超过了限制，分配失败进入if，返回0
+     *      否则调用grow_slab_list检查是否需要增大slab_list的大小
+     *          如果在grow_slab_list返回失败，则不继续分配空间，进入if,返回0
+     *          否则分配空间memory_allocate，如果分配失败，同样进入if，返回0
+     */
     if ((mem_limit && mem_malloced + len > mem_limit && p->slabs > 0) ||
         (grow_slab_list(id) == 0) ||
         ((ptr = memory_allocate((size_t)len)) == 0)) {
@@ -210,11 +231,11 @@ static int do_slabs_newslab(const unsigned int id) {
         return 0;
     }
 
-    memset(ptr, 0, (size_t)len);
-    split_slab_page_into_freelist(ptr, id);
+    memset(ptr, 0, (size_t)len); // 清干净内存空间
+    split_slab_page_into_freelist(ptr, id); // 把新申请的slab放到solts中去
 
-    p->slab_list[p->slabs++] = ptr;
-    mem_malloced += len;
+    p->slab_list[p->slabs++] = ptr; // 把新的slab加到slab_list加到slab_list数组中去
+    mem_malloced += len; // 记下已分配的空间大小
     MEMCACHED_SLABS_SLABCLASS_ALLOCATE(id);
 
     return 1;
@@ -267,6 +288,15 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     return ret;
 }
 
+/**
+ * 这个函数名虽然叫做do_slabs_free，听上去好像是释放空间，其只是是把空间变成可用。
+ * 变成可用也就是加入到当前slabclass的slots链表中
+ * 所以新申请的slab也会调用这个函数，让整个slab变得可用
+ * ps:这个命名应该有历史原因，因为以前的memcached版本slots链表中保存的是回收的item空间，而现在保存的是所有可用的item空间
+ * @param ptr
+ * @param size
+ * @param id
+ */
 static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     slabclass_t *p;
     item *it;
@@ -280,13 +310,13 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     p = &slabclass[id];
 
     it = (item *)ptr;
-    it->it_flags |= ITEM_SLABBED;
+    it->it_flags |= ITEM_SLABBED; // 把item标记为slabbed状态
     it->prev = 0;
-    it->next = p->slots;
+    it->next = p->slots; // 插入到slots链表汇总
     if (it->next) it->next->prev = it;
     p->slots = it;
 
-    p->sl_curr++;
+    p->sl_curr++; // 空闲的item数+1
     p->requested -= size;
     return;
 }
@@ -381,9 +411,15 @@ static void do_slabs_stats(ADD_STAT add_stats, void *c) {
     add_stats(NULL, 0, NULL, 0, c);
 }
 
+// 分配内存空间
 static void *memory_allocate(size_t size) {
     void *ret;
 
+    /**
+     * 有两种分配策略
+     * 1.如果开启了内存预分配处理，则只需要从预分配好的内存那块分割一块出来，即进入下面的else分支
+     * 2.如果没有开启预分配，则malloc分配内存
+     */
     if (mem_base == NULL) {
         /* We are not using a preallocated large memory chunk */
         ret = malloc(size);
@@ -414,7 +450,7 @@ void *slabs_alloc(size_t size, unsigned int id) {
     void *ret;
 
     pthread_mutex_lock(&slabs_lock);
-    // 根据 item 大小和
+    // 根据 item 大小和slabclass分配空间
     ret = do_slabs_alloc(size, id);
     pthread_mutex_unlock(&slabs_lock);
     return ret;

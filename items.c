@@ -340,8 +340,8 @@ int do_item_link(item *it, const uint32_t hv) {
 
     /* Allocate a new CAS ID on link. */
     ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
-    assoc_insert(it, hv);
-    item_link_q(it);
+    assoc_insert(it, hv); // 插入hash表
+    item_link_q(it); // 插入LRU表
     refcount_incr(&it->refcount);
     mutex_unlock(&cache_lock);
 
