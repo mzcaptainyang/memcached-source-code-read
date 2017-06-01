@@ -92,10 +92,10 @@ unsigned int slabs_clsid(const size_t size) {
  * Determines the chunk sizes and initializes the slab class descriptors
  * accordingly.
  */
+ // 初始化作业本的大小
 void slabs_init(const size_t limit, const double factor, const bool prealloc) {
     int i = POWER_SMALLEST - 1;
-    // size 表示申请空间的大小，其值由配置的 chunk_size 和单个 item 的大小来指定
-    // chunk的数据结构体本身需要消耗一定的空间，所以消耗的实际内存需要加上chunk的大小
+     // size 指的是每个item所占空间的大小，chunk自身的结构体也要占据大小
     unsigned int size = sizeof(item) + settings.chunk_size;
 
     mem_limit = limit; // mem_limit 是全局变量，是总内存的大小，默认为64M
@@ -112,32 +112,34 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc) {
         }
     }
 
-    // 置空 slabclass 数组
+    // 置空 slabclass 数组，slabclass
     memset(slabclass, 0, sizeof(slabclass));
 
     // 开始分配，i < 200 && 单个 chunk 的 size < 单个 item 最大大小/内存增长因子
     while (++i < POWER_LARGEST && size <= settings.item_size_max / factor) {
         /* Make sure items are always n-byte aligned */
+        // 将size执行8byte对齐
         if (size % CHUNK_ALIGN_BYTES)
             size += CHUNK_ALIGN_BYTES - (size % CHUNK_ALIGN_BYTES);
 
-        slabclass[i].size = size;
-        slabclass[i].perslab = settings.item_size_max / slabclass[i].size;
-        size *= factor;
-        if (settings.verbose > 1) {
+        slabclass[i].size = size; // size为chunk(作业本格子)的大小
+        slabclass[i].perslab = settings.item_size_max / slabclass[i].size; // slab(作业本)对应的chunk（作业本格子）个数
+        size *= factor; // size 下一个值按照增长因子的倍数增长
+        if (settings.verbose > 1) { // 如果打开了调试信息，则输出调试信息
             fprintf(stderr, "slab class %3d: chunk size %9u perslab %7u\n",
                     i, slabclass[i].size, slabclass[i].perslab);
         }
     }
-
+     // 循环结束的时候，size已经增长到1M
     power_largest = i;
-    slabclass[power_largest].size = settings.item_size_max;
-    slabclass[power_largest].perslab = 1;
-    if (settings.verbose > 1) {
+    slabclass[power_largest].size = settings.item_size_max; // 最后再增加一个slab，这个slab中chunk的大小为1M
+    slabclass[power_largest].perslab = 1; // 最后增加的slab默认的chunk为1个
+    if (settings.verbose > 1) { // 打印调试信息
         fprintf(stderr, "slab class %3d: chunk size %9u perslab %7u\n",
                 i, slabclass[i].size, slabclass[i].perslab);
     }
 
+     // 读取环境变量中的T_MEMD_INITIAL_MALLOC的值
     /* for the test suite:  faking of how much we've already malloc'd */
     {
         char *t_initial_malloc = getenv("T_MEMD_INITIAL_MALLOC");
@@ -148,10 +150,12 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc) {
     }
 
     if (prealloc) {
+        // 分配每个slab的空间，传入最大已经初始化的最大slab编号
         slabs_preallocate(power_largest);
     }
 }
 
+// 分配每个slab的内存空间
 static void slabs_preallocate (const unsigned int maxslabs) {
     int i;
     unsigned int prealloc = 0;
@@ -162,6 +166,7 @@ static void slabs_preallocate (const unsigned int maxslabs) {
        list.  if you really don't want this, you can rebuild without
        these three lines.  */
 
+    // 执行分配操作，对第i个slabclass执行分配操作
     for (i = POWER_SMALLEST; i <= POWER_LARGEST; i++) {
         if (++prealloc > maxslabs)
             return;
@@ -210,10 +215,10 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
  * @return
  */
 static int do_slabs_newslab(const unsigned int id) {
-    slabclass_t *p = &slabclass[id];
+    slabclass_t *p = &slabclass[id]; // p指向第i个slabclass
     // 先判断是否开启了自定义的slab大小，如果没有就按照默认的，即p->size*p->perslab
     int len = settings.slab_reassign ? settings.item_size_max
-        : p->size * p->perslab;
+        : p->size * p->perslab; // （p->size * p->perslab）得出的值是当前slabclass所占空间的大小
     char *ptr;
 
     /**
@@ -234,6 +239,9 @@ static int do_slabs_newslab(const unsigned int id) {
     memset(ptr, 0, (size_t)len); // 清干净内存空间
     split_slab_page_into_freelist(ptr, id); // 把新申请的slab放到solts中去
 
+    /**
+     * slab_list是这个slabclass下的slabs列表，是一个数组，每个元素是一个slab指针
+     */
     p->slab_list[p->slabs++] = ptr; // 把新的slab加到slab_list加到slab_list数组中去
     mem_malloced += len; // 记下已分配的空间大小
     MEMCACHED_SLABS_SLABCLASS_ALLOCATE(id);
@@ -302,22 +310,25 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     item *it;
 
     assert(((item *)ptr)->slabs_clsid == 0);
-    assert(id >= POWER_SMALLEST && id <= power_largest);
+    assert(id >= POWER_SMALLEST && id <= power_largest); // 判断id的有效性
     if (id < POWER_SMALLEST || id > power_largest)
         return;
 
-    MEMCACHED_SLABS_FREE(size, id, ptr);
-    p = &slabclass[id];
+    MEMCACHED_SLABS_FREE(size, id, ptr); // trace操作，在非debug模式下，无意义
+    p = &slabclass[id]; // p指针指向slabclass[i]
 
     it = (item *)ptr;
     it->it_flags |= ITEM_SLABBED; // 把item标记为slabbed状态
     it->prev = 0;
+    /**
+     * p->slots表示可用slots链表的头指针，此处插在头部和尾部是均等的操作，但是头部方便取指针，故如此操作
+     */
     it->next = p->slots; // 插入到slots链表汇总
     if (it->next) it->next->prev = it;
     p->slots = it;
 
     p->sl_curr++; // 空闲的item数+1
-    p->requested -= size;
+    p->requested -= size; // 已经申请到的空间数量更新
     return;
 }
 
