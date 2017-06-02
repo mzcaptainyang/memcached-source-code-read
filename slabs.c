@@ -180,8 +180,10 @@ static void slabs_preallocate (const unsigned int maxslabs) {
 
 }
 
+
+// 初始化slabclass的slab_class，而slab_list中的指针指向每个slab，id为slabclass的序号
 static int grow_slab_list (const unsigned int id) {
-    slabclass_t *p = &slabclass[id];
+    slabclass_t *p = &slabclass[id]; // p指向第id个slabclass
     /**
      * p->slab_list是一个固定空间大小的数组.而list_size是这个数组分配的空间
      * p->slabs代表已经分配出去的slabs数
@@ -189,10 +191,10 @@ static int grow_slab_list (const unsigned int id) {
      * 所以当slabs等于list_size的时候，代表这个slab_list已经满了，得增大空间
      */
     if (p->slabs == p->list_size) {
-        size_t new_size =  (p->list_size != 0) ? p->list_size * 2 : 16;
-        void *new_list = realloc(p->slab_list, new_size * sizeof(void *));
+        size_t new_size =  (p->list_size != 0) ? p->list_size * 2 : 16; // new_size 如果是首次分配，则取16，否则按照旧值扩大2倍
+        void *new_list = realloc(p->slab_list, new_size * sizeof(void *)); // 申请空间，这个空间是从系统分配，不是从内存池分配
         if (new_list == 0) return 0;
-        p->list_size = new_size;
+        p->list_size = new_size; // 修改第id个clabclass的值
         p->slab_list = new_list;
     }
     return 1;
@@ -241,6 +243,7 @@ static int do_slabs_newslab(const unsigned int id) {
 
     /**
      * slab_list是这个slabclass下的slabs列表，是一个数组，每个元素是一个slab指针
+     * slabs表示已经分配出去的slabs数
      */
     p->slab_list[p->slabs++] = ptr; // 把新的slab加到slab_list加到slab_list数组中去
     mem_malloced += len; // 记下已分配的空间大小
@@ -437,20 +440,23 @@ static void *memory_allocate(size_t size) {
     } else {
         ret = mem_current;
 
+        // size大于剩余的空间，返回null
         if (size > mem_avail) {
             return NULL;
         }
 
+        // 按照8字节对齐
         /* mem_current pointer _must_ be aligned!!! */
         if (size % CHUNK_ALIGN_BYTES) {
             size += CHUNK_ALIGN_BYTES - (size % CHUNK_ALIGN_BYTES);
         }
 
+        // 当前分配到的内存地址+size的大小
         mem_current = ((char*)mem_current) + size;
         if (size < mem_avail) {
-            mem_avail -= size;
+            mem_avail -= size; // 当前可以地大小-size
         } else {
-            mem_avail = 0;
+            mem_avail = 0; // 当前可用地址大小置为0
         }
     }
 
