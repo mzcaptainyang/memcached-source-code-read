@@ -3758,7 +3758,7 @@ static void drive_machine(conn *c) {
     while (!stop) {
 
         switch(c->state) {
-        case conn_listening:
+        case conn_listening: // 此 case只有当listen fd有事件到达后触发主线程执行
             addrlen = sizeof(addr);
             if ((sfd = accept(c->sfd, (struct sockaddr *)&addr, &addrlen)) == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
