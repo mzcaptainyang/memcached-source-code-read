@@ -4287,7 +4287,7 @@ static int server_socket(const char *interface,
                                   UDP_READ_BUFFER_SIZE, transport);
             }
         } else {
-            // TCP，建立连接
+            // 创建主线程，监听，连接，conn_state为conn_listening
             if (!(listen_conn_add = conn_new(sfd, conn_listening,
                                              EV_READ | EV_PERSIST, 1,
                                              transport, main_base))) {
@@ -5165,6 +5165,7 @@ int main (int argc, char **argv) {
     }
 
     /* initialize main thread libevent instance */
+    // 全局的main_base变量
     main_base = event_init();
 
     /* initialize other stuff */
@@ -5184,6 +5185,7 @@ int main (int argc, char **argv) {
         exit(EX_OSERR);
     }
     /* start up worker threads if MT mode */
+    // 初始化主线程的同时装载work线程
     thread_init(settings.num_threads, main_base);
 
     if (start_assoc_maintenance_thread() == -1) {
@@ -5275,6 +5277,7 @@ int main (int argc, char **argv) {
     drop_privileges();
 
     /* enter the event loop */
+    // 进入事件循环
     if (event_base_loop(main_base, 0) != 0) {
         retval = EXIT_FAILURE;
     }
