@@ -2887,9 +2887,10 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         return;
     }
 
-    key = tokens[KEY_TOKEN].value;
-    nkey = tokens[KEY_TOKEN].length;
+    key = tokens[KEY_TOKEN].value; // 键名
+    nkey = tokens[KEY_TOKEN].length; // 键长
 
+    // 下面这个if同时把命令相应的参数（如缓存超时时间等）赋值给相应变量，exptime_int等
     if (! (safe_strtoul(tokens[2].value, (uint32_t *)&flags)
            && safe_strtol(tokens[3].value, &exptime_int)
            && safe_strtol(tokens[4].value, (int32_t *)&vlen))) {
@@ -2924,6 +2925,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         stats_prefix_record_set(key, nkey);
     }
 
+    // 在这里进行内存的分配工作
     it = item_alloc(key, nkey, flags, realtime(exptime), vlen);
 
     if (it == 0) {
@@ -2949,11 +2951,11 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     }
     ITEM_set_cas(it, req_cas_id);
 
-    c->item = it;
-    c->ritem = ITEM_data(it);
-    c->rlbytes = it->nbytes;
-    c->cmd = comm;
-    conn_set_state(c, conn_nread);
+    c->item = it; // 将item指针指向分配的item空间
+    c->ritem = ITEM_data(it); // 将ritem指向it->data中存放value的地址空间
+    c->rlbytes = it->nbytes; // data的大小
+    c->cmd = comm; // 命令类型
+    conn_set_state(c, conn_nread); // 继续调用状态机，执行命令的另一半工作
 }
 
 static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens) {
@@ -3225,11 +3227,18 @@ static void process_slabs_automove_command(conn *c, token_t *tokens, const size_
     return;
 }
 
+/**
+ * 这里就是对命令的解析和执行了
+ * 其实准确的来说，这里只是执行了命令的一半，（例如如果是set命令，则是『命令行』部分），然后根据命令类型再次改变conn_state使程序再次进入状态机，从而完成命令的另一半工作。
+ * command此时的指针值等于conn的rcurr
+ * @param c
+ * @param command
+ */
 static void process_command(conn *c, char *command) {
 
     token_t tokens[MAX_TOKENS];
     size_t ntokens;
-    int comm;
+    int comm; // 命令类型
 
     assert(c != NULL);
 
@@ -3251,7 +3260,11 @@ static void process_command(conn *c, char *command) {
         return;
     }
 
+    /**
+     * 下面这个tokenize_command是一个词法分析，把command分解成一个个token
+     */
     ntokens = tokenize_command(command, tokens, MAX_TOKENS);
+    // 下面是对上面分解出来的token再进行词法分析，解析命令，下面的comm变量为最终解析出来的命令类型
     if (ntokens >= 3 &&
         ((strcmp(tokens[COMMAND_TOKEN].value, "get") == 0) ||
          (strcmp(tokens[COMMAND_TOKEN].value, "bget") == 0))) {
@@ -3265,6 +3278,7 @@ static void process_command(conn *c, char *command) {
                 (strcmp(tokens[COMMAND_TOKEN].value, "prepend") == 0 && (comm = NREAD_PREPEND)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "append") == 0 && (comm = NREAD_APPEND)) )) {
 
+        // add/set/replace/prepend/append为『更新』命令，调用同一个函数执行命令
         process_update_command(c, tokens, ntokens, comm, false);
 
     } else if ((ntokens == 7 || ntokens == 8) && (strcmp(tokens[COMMAND_TOKEN].value, "cas") == 0 && (comm = NREAD_CAS))) {
@@ -3504,7 +3518,12 @@ static int try_read_command(conn *c) {
 
             return 0;
         }
-        cont = el + 1;
+        cont = el + 1; // 下一个命令的开头
+        /**
+         * 下面的这个if的作用是把el指向当前命令最后一个有效字符的下一个字符，即\r
+         * 目的是为了在命令后面插上一个\0，字符串结束
+         * 例如GET abc\r\n******，变成GET abc\0\n******，这样以后读出的字符串就是一个命令
+         */
         if ((el - c->rcurr) > 1 && *(el - 1) == '\r') {
             el--;
         }
@@ -3512,8 +3531,10 @@ static int try_read_command(conn *c) {
 
         assert(cont <= (c->rcurr + c->rbytes));
 
-        process_command(c, c->rcurr);
+        process_command(c, c->rcurr); // 执行命令
+        // 当命令执行之后，把当前指针rcurr指向下一个命令的开头，并调用rbytes(剩余未处理自己数大小)
 
+        // 逻辑上相当于把已处理的命令去掉
         c->rbytes -= (cont - c->rcurr);
         c->rcurr = cont;
 
@@ -3880,15 +3901,37 @@ static void drive_machine(conn *c) {
             break;
 
         case conn_nread:
+            /**
+             * 由process_update_command执行后进入此状态，process_update_command函数只执行了add/set/replace等命令的一半,剩下的一半在这里完成
+             * 例如如果是上面的set命令，process_update_command只完成了『命令行』部分，分配了item空间，但是还没有把value塞到对应的item中去。因此，在这一半要完成的动作就是把value的数据从socket中读出来，塞到刚拿到的item空间中去
+             */
+
+            /**
+             * 下面的rlbytes字段表示要读的value数据还剩多个个字节（注意与rbytes的区别）
+             * 如果是第一次有process_update_command进入到此，rlbytes此时在process_update_command中被初始化为item->nbytes，即value的总字节数，set name 0 0 5\r\n中的5
+             */
             if (c->rlbytes == 0) {
+                /**
+                 *
+                 * 注意，rlbytes为0才读完，否则状态机一直会进入这个conn_nread分支继续读取value数据，读完就调用complate_nread完成收尾工作，程序会跟着complate_nread会break
+                 */
                 complete_nread(c);
                 break;
             }
             /* first check if we have leftovers in the conn_read buffer */
+                // 如果还有数据没有读完，继续往下执行。可知，下面的动作就是继续从buffer中哦该读取value数据往item中的data的value塞
             if (c->rbytes > 0) {
+                /**
+                 * 进入到这个if，是因为有可能先前读到的buffer已经有『数据行』部分，因为一次事件通知，不保证socket可读数据只有一个\r\n
+                 */
+                 /**
+                  * 取rbytes与rlbytes中的最小值
+                  * 因为这里我们的目的是剩下的还没有读取的value字节，而rlbytes代表的是还剩下的字节数。如果rlbytes比rbytes小，只读rlbytes长度就足够了，rbytes中多出来的部分不是我们这个时候想要的
+                  * 如果rbytes比rlbytes小，即使你要rlbytes这么多，但buffer中并没有这么多给你读
+                  */
                 int tocopy = c->rbytes > c->rlbytes ? c->rlbytes : c->rbytes;
                 if (c->ritem != c->rcurr) {
-                    memmove(c->ritem, c->rcurr, tocopy);
+                    memmove(c->ritem, c->rcurr, tocopy); // 往分配的item中塞，即为key设置value的过程
                 }
                 c->ritem += tocopy;
                 c->rlbytes -= tocopy;
@@ -3900,7 +3943,8 @@ static void drive_machine(conn *c) {
             }
 
             /*  now try reading from the socket */
-            res = read(c->sfd, c->ritem, c->rlbytes);
+                // 这里往往是我们先前读到buffer的数据还没有足够的情况下，从socket中读
+            res = read(c->sfd, c->ritem, c->rlbytes); // 往分配的item中塞，即为key设置value的过程
             if (res > 0) {
                 pthread_mutex_lock(&c->thread->stats.mutex);
                 c->thread->stats.bytes_read += res;
