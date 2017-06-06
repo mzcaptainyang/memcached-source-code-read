@@ -139,6 +139,7 @@ typedef void (*ADD_STAT)(const char *key, const uint16_t klen,
 /**
  * Possible states of a connection.
  */
+ // conn_states是一个枚举
 enum conn_states {
     conn_listening,  /**< the socket which listens for connections */
     conn_new_cmd,    /**< Prepare connection for next command */
@@ -370,29 +371,36 @@ typedef struct {
  */
 typedef struct conn conn;
 struct conn {
-    int    sfd;
+    int    sfd; // 连接的 socket fd
     sasl_conn_t *sasl_conn;
-    enum conn_states  state;
+    enum conn_states  state; // 当前的连接状态
     enum bin_substates substate;
-    struct event event;
-    short  ev_flags;
-    short  which;   /** which events were just triggered */
+    struct event event; // 监听的事件
+    short  ev_flags; // 监听的事件类型
+    short  which;   /** which events were just triggered */ // 刚触发的事件
 
-    char   *rbuf;   /** buffer to read commands into */
-    char   *rcurr;  /** but if we parsed some already, this is where we stopped */
-    int    rsize;   /** total allocated size of rbuf */
-    int    rbytes;  /** how much data, starting from rcur, do we have unparsed */
+    /**
+     * 读buffer会涉及两个方向上的读：
+     * 1.从socket读进来到rbuf里面
+     * 2.从rbuf里面把数据读出去解析
+     * 读buffer相当于一个中介，从socket读进来最终还是得被别人读出去解析，而rcurr工作指针与rbytes就是在rbuf数据被读出去的时候用到，用来控制可以读取去被解析的数据还剩下多少
+     */
+    char   *rbuf;   /** buffer to read commands into */ // 读buffer
+    char   *rcurr;  /** but if we parsed some already, this is where we stopped */ // 读buffer的当前指针
+    int    rsize;   /** total allocated size of rbuf */ // 读buffer大小
+    int    rbytes;  /** how much data, starting from rcur, do we have unparsed */ // 剩余buffer字节数
 
+    // 下面的四个属性和上面的类似
     char   *wbuf;
     char   *wcurr;
     int    wsize;
     int    wbytes;
     /** which state to go into after finishing current write */
-    enum conn_states  write_and_go;
+    enum conn_states  write_and_go; // 完成当前的写操作后，连接状态会变为此状态
     void   *write_and_free; /** free this memory after finishing writing */
 
-    char   *ritem;  /** when we read in an item's value, it goes here */
-    int    rlbytes;
+    char   *ritem;  /** when we read in an item's value, it goes here */ // 这个指针指向item结构体中data中的value地址
+    int    rlbytes; // 尚未读完item的data的value的字节数
 
     /* data for the nread state */
 
@@ -402,11 +410,12 @@ struct conn {
      * data. The data is read into ITEM_data(item) to avoid extra copying.
      */
 
-    void   *item;     /* for commands set/add/replace  */
+    void   *item;     /* for commands set/add/replace  */ // 当执行set/add/replace命令时，此指针用户指向分配的item空间
 
     /* data for the swallow state */
     int    sbytes;    /* how many bytes to swallow */
 
+    // 下面是往socket写出数据时用到的字段
     /* data for the mwrite state */
     struct iovec *iov;
     int    iovsize;   /* number of elements allocated in iov[] */
@@ -431,6 +440,7 @@ struct conn {
     enum protocol protocol;   /* which protocol this connection speaks */
     enum network_transport transport; /* what transport is used by this connection */
 
+    // UDP相关的字段
     /* data for UDP clients */
     int    request_id; /* Incoming UDP request ID, if this is a UDP "connection" */
     struct sockaddr request_addr; /* Who sent the most recent request */
@@ -446,6 +456,7 @@ struct conn {
         size_t offset;
     } stats;
 
+    // 二进制相关的字段
     /* Binary protocol stuff */
     /* This is where the binary header goes */
     protocol_binary_request_header binary_header;

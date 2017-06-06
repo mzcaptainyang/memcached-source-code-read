@@ -2241,10 +2241,11 @@ static void reset_cmd_handler(conn *c) {
         c->item = NULL;
     }
     conn_shrink(c);
+    // 第一次有请求过来触发到此函数时，c->rbytes为0
     if (c->rbytes > 0) {
         conn_set_state(c, conn_parse_cmd);
     } else {
-        conn_set_state(c, conn_waiting);
+        conn_set_state(c, conn_waiting); // 第一次请求进入此分支
     }
 }
 
@@ -3477,11 +3478,12 @@ static int try_read_command(conn *c) {
     } else {
         char *el, *cont;
 
-        if (c->rbytes == 0)
+        if (c->rbytes == 0) // 读buffer没有待解析的数据
             return 0;
 
-        el = memchr(c->rcurr, '\n', c->rbytes);
+        el = memchr(c->rcurr, '\n', c->rbytes); // 找到第一个命令的末尾，也就是换行符
         if (!el) {
+            // 如果没有找到换行符， 则说明读到的数据还不足以成为一个完成的命令，返回0
             if (c->rbytes > 1024) {
                 /*
                  * We didn't have a '\n' in the first k. This _has_ to be a
@@ -3583,7 +3585,7 @@ static enum try_read_result try_read_network(conn *c) {
     }
 
     while (1) {
-        if (c->rbytes >= c->rsize) {
+        if (c->rbytes >= c->rsize) { // 读buffer空间扩充
             if (num_allocs == 4) {
                 return gotdata;
             }
@@ -3601,18 +3603,19 @@ static enum try_read_result try_read_network(conn *c) {
             c->rsize *= 2;
         }
 
-        int avail = c->rsize - c->rbytes;
-        res = read(c->sfd, c->rbuf + c->rbytes, avail);
+        int avail = c->rsize - c->rbytes; // 读buffer的空间还剩余多少大小可用
+        res = read(c->sfd, c->rbuf + c->rbytes, avail); // 往剩下的可用的地方塞
         if (res > 0) {
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.bytes_read += res;
             pthread_mutex_unlock(&c->thread->stats.mutex);
             gotdata = READ_DATA_RECEIVED;
+            // rbytes是当前指针rcurr至读buffer末尾的数据大小，这里可简单的理解为rbytes的初始化
             c->rbytes += res;
-            if (res == avail) {
+            if (res == avail) { // 如果还没有读完，此时读buffer可用空间满了，那么下次循环会进行读buffer空间扩充
                 continue;
             } else {
-                break;
+                break; // socket的可读数据都读完了
             }
         }
         if (res == 0) {
@@ -3830,6 +3833,11 @@ static void drive_machine(conn *c) {
             break;
 
         case conn_parse_cmd :
+            /**
+             * try_read_network后，到达conn_parse_cmd状态，但try_read_network并不确保每次到达的数据都足够一个完整的cmd(ascii协议情况下往往是没有『\r\n』，也就是没有回车换行)
+             * 所以下面的try_read_command之所以叫做try就是这个原因
+             * 当读到的数据还不够成为一个cmd的时候，返回0，conn继续进入conn_waiting状态等待更多的数据到达
+             */
             if (try_read_command(c) == 0) {
                 /* wee need more data! */
                 conn_set_state(c, conn_waiting);
@@ -3841,8 +3849,14 @@ static void drive_machine(conn *c) {
             /* Only process nreqs at a time to avoid starving other
                connections */
 
+            /**
+             * 这里的reqs是请求的意思，可以理解为『命令』。一次event发生，有可能包含多个命令，从cliend_fd里面read到的一次数据，不能保证这个数据只包含了一个命令，有可能是多个命令数据堆在一起的一次事件通知，这个nreqs是用来控制一次event最多能处理多少个命令
+             */
             --nreqs;
             if (nreqs >= 0) {
+                /**
+                 * 准备执行命令，为什么叫做reset cmd,reset_cmd_handler其实坐了一些解析命令之前的初始化动下一个，都会重新进入这个case作。而像上面说的，一次event有可能有多个命令，每执行一个命令，如果还有conn_new_cmd,reset一下再执行下一个命令
+                 */
                 reset_cmd_handler(c);
             } else {
                 pthread_mutex_lock(&c->thread->stats.mutex);
