@@ -388,7 +388,7 @@ struct conn {
     char   *rbuf;   /** buffer to read commands into */ // 读buffer
     char   *rcurr;  /** but if we parsed some already, this is where we stopped */ // 读buffer的当前指针
     int    rsize;   /** total allocated size of rbuf */ // 读buffer大小
-    int    rbytes;  /** how much data, starting from rcur, do we have unparsed */ // 剩余buffer字节数
+    int    rbytes;  /** how much data, starting from rcur, do we have unparsed */ // 剩余buffer字节数（也就是rbuf中等待解析的字节数）
 
     // 下面的四个属性和上面的类似
     char   *wbuf;
