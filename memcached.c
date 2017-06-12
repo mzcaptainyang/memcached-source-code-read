@@ -3784,11 +3784,12 @@ static void drive_machine(conn *c) {
         switch(c->state) {
         case conn_listening: // 此 case只有当listen fd有事件到达后触发主线程执行
             addrlen = sizeof(addr);
+                // Master线程进入状态机之后执行accept操作，这个操作是非阻塞的
             if ((sfd = accept(c->sfd, (struct sockaddr *)&addr, &addrlen)) == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) { // 非阻塞模型，这个错误码继续等待
                     /* these are transient, so don't log anything */
                     stop = true;
-                } else if (errno == EMFILE) {
+                } else if (errno == EMFILE) { // 连接超载
                     if (settings.verbose > 0)
                         fprintf(stderr, "Too many open connections\n");
                     accept_new_conns(false);
@@ -3799,6 +3800,7 @@ static void drive_machine(conn *c) {
                 }
                 break;
             }
+                // 已经accept成功，将accept之后的描述符设置为非阻塞的
             if ((flags = fcntl(sfd, F_GETFL, 0)) < 0 ||
                 fcntl(sfd, F_SETFL, flags | O_NONBLOCK) < 0) {
                 perror("setting O_NONBLOCK");
@@ -3806,6 +3808,7 @@ static void drive_machine(conn *c) {
                 break;
             }
 
+                // 判断是否超过最大的连接数
             if (settings.maxconns_fast &&
                 stats.curr_conns + stats.reserved_fds >= settings.maxconns - 1) {
                 str = "ERROR Too many open connections\r\n";
