@@ -3808,7 +3808,7 @@ static void drive_machine(conn *c) {
                 break;
             }
 
-                // 判断是否超过最大的连接数
+                // 判断是否超过最大的连接数 TODO 这个判断的方法是否合理
             if (settings.maxconns_fast &&
                 stats.curr_conns + stats.reserved_fds >= settings.maxconns - 1) {
                 str = "ERROR Too many open connections\r\n";
@@ -3818,6 +3818,7 @@ static void drive_machine(conn *c) {
                 stats.rejected_conns++;
                 STATS_UNLOCK();
             } else {
+                // 把accept后产生的sfd分发给work线程
                 dispatch_conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
                                      DATA_BUFFER_SIZE, tcp_transport);
             }

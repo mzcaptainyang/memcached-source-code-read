@@ -392,10 +392,11 @@ static void *worker_libevent(void *arg) {
  * input arrives on the libevent wakeup pipe.
  */
 static void thread_libevent_process(int fd, short which, void *arg) {
-    LIBEVENT_THREAD *me = arg;
+    LIBEVENT_THREAD *me = arg; // 接手传递过来的指针
     CQ_ITEM *item;
     char buf[1];
 
+    // 从libevent事件监听基地中的fd中，读取1一个byte
     if (read(fd, buf, 1) != 1)
         if (settings.verbose > 0)
             fprintf(stderr, "Can't read from libevent pipe\n");
@@ -446,24 +447,25 @@ static int last_thread = -1;
  */
 void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
                        int read_buffer_size, enum network_transport transport) {
-    CQ_ITEM *item = cqi_new();
+    CQ_ITEM *item = cqi_new(); // 创建一个连接队列
     char buf[1];
-    int tid = (last_thread + 1) % settings.num_threads;
+    int tid = (last_thread + 1) % settings.num_threads; // 通过轮询的方法选择一个线程
 
-    LIBEVENT_THREAD *thread = threads + tid;
+    LIBEVENT_THREAD *thread = threads + tid; // threads存储了所有的工作线程组
 
-    last_thread = tid;
+    last_thread = tid; // 缓存这次的线程编号，下次待用
 
-    item->sfd = sfd;
-    item->init_state = init_state;
-    item->event_flags = event_flags;
-    item->read_buffer_size = read_buffer_size;
-    item->transport = transport;
+    item->sfd = sfd; // sfd表示accept之后的描述符
+    item->init_state = init_state; // 连接状态
+    item->event_flags = event_flags; // 事件类型
+    item->read_buffer_size = read_buffer_size; // 读buffer大小
+    item->transport = transport; // 协议类型
 
-    cq_push(thread->new_conn_queue, item);
+    cq_push(thread->new_conn_queue, item); // 将item添加到worker线程的工作队列汇中
 
     MEMCACHED_CONN_DISPATCH(sfd, thread->thread_id);
     buf[0] = 'c';
+    // 在worker线程的notify_send_fd中写入字符c,告诉worker有连接来了
     if (write(thread->notify_send_fd, buf, 1) != 1) {
         perror("Writing to thread notify pipe");
     }
