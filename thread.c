@@ -403,11 +403,11 @@ static void thread_libevent_process(int fd, short which, void *arg) {
 
     switch (buf[0]) {
     case 'c':
-    item = cq_pop(me->new_conn_queue);
+    item = cq_pop(me->new_conn_queue); // 从连接线程中读出master线程投递的信息
 
     if (NULL != item) {
         conn *c = conn_new(item->sfd, item->init_state, item->event_flags,
-                           item->read_buffer_size, item->transport, me->base);
+                           item->read_buffer_size, item->transport, me->base); // 创建一个连接
         if (c == NULL) {
             if (IS_UDP(item->transport)) {
                 fprintf(stderr, "Can't listen for events on UDP socket\n");

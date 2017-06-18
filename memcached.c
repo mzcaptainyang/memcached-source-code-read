@@ -2236,15 +2236,15 @@ static void complete_nread_binary(conn *c) {
 static void reset_cmd_handler(conn *c) {
     c->cmd = -1;
     c->substate = bin_no_state;
-    if(c->item != NULL) {
-        item_remove(c->item);
+    if(c->item != NULL) { // 连接里面还有item，删除item
+        item_remove(c->item); // 删除item
         c->item = NULL;
     }
-    conn_shrink(c);
+    conn_shrink(c); // 整理缓冲区
     // 第一次有请求过来触发到此函数时，c->rbytes为0
-    if (c->rbytes > 0) {
-        conn_set_state(c, conn_parse_cmd);
-    } else {
+    if (c->rbytes > 0) { // 缓冲区还有数据
+        conn_set_state(c, conn_parse_cmd); // 更新状态
+    } else { // 如果没有数据
         conn_set_state(c, conn_waiting); // 第一次请求进入此分支
     }
 }
@@ -3877,27 +3877,27 @@ static void drive_machine(conn *c) {
             /**
              * 这里的reqs是请求的意思，可以理解为『命令』。一次event发生，有可能包含多个命令，从cliend_fd里面read到的一次数据，不能保证这个数据只包含了一个命令，有可能是多个命令数据堆在一起的一次事件通知，这个nreqs是用来控制一次event最多能处理多少个命令
              */
-            --nreqs;
+            --nreqs; // 全局变量，记录每个libevent实例处理的事件，通过初始启动参数配置， Maximum number of io to process on each io-event
             if (nreqs >= 0) {
                 /**
                  * 准备执行命令，为什么叫做reset cmd,reset_cmd_handler其实坐了一些解析命令之前的初始化动下一个，都会重新进入这个case作。而像上面说的，一次event有可能有多个命令，每执行一个命令，如果还有conn_new_cmd,reset一下再执行下一个命令
                  */
                 reset_cmd_handler(c);
-            } else {
+            } else { // 拒绝请求
                 pthread_mutex_lock(&c->thread->stats.mutex);
-                c->thread->stats.conn_yields++;
+                c->thread->stats.conn_yields++; // 更新统计数据
                 pthread_mutex_unlock(&c->thread->stats.mutex);
-                if (c->rbytes > 0) {
+                if (c->rbytes > 0) { // 如果缓冲区有数据，则需要处理
                     /* We have already read in data into the input buffer,
                        so libevent will most likely not signal read events
                        on the socket (unless more data is available. As a
                        hack we should just put in a request to write data,
                        because that should be possible ;-)
                     */
-                    if (!update_event(c, EV_WRITE | EV_PERSIST)) {
+                    if (!update_event(c, EV_WRITE | EV_PERSIST)) { // 更新libevent状态
                         if (settings.verbose > 0)
                             fprintf(stderr, "Couldn't update event\n");
-                        conn_set_state(c, conn_closing);
+                        conn_set_state(c, conn_closing); // 关闭连接
                     }
                 }
                 stop = true;
